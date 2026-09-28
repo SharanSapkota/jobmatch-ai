@@ -4,11 +4,6 @@
       "Bash(npm:*)",
       "Bash(npx:*)",
       "Bash(node:*)",
-      "Bash(git status:*)",
-      "Bash(git diff:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git log:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(mkdir:*)"
