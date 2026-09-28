@@ -1,0 +1,381 @@
+// JobMatch AI data model. Covers all phases (see docs/spec-overview.md section 4)
+// so later phases need no reshaping. Every user-owned row cascades from User.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum WorkMode {
+  REMOTE
+  HYBRID
+  ONSITE
+  ANY
+}
+
+enum ResumeFileType {
+  PDF
+  DOCX
+}
+
+enum ParseStatus {
+  PENDING
+  PARSED
+  FAILED
+}
+
+enum RemoteType {
+  REMOTE
+  HYBRID
+  ONSITE
+  UNKNOWN
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  TEMPORARY
+  INTERNSHIP
+  OTHER
+  UNKNOWN
+}
+
+enum ApplicationStatus {
+  SAVED
+  INTERESTED
+  APPLIED
+  SCREENING
+  INTERVIEW
+  OFFER
+  REJECTED
+  WITHDRAWN
+}
+
+enum RecommendationType {
+  HEADLINE
+  SUMMARY
+  EXPERIENCE_BULLET
+  SKILLS
+  PROJECT
+  ACHIEVEMENT
+  ORDERING
+}
+
+enum RecommendationPriority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum QueueStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile         CandidateProfile?
+  resumes         Resume[]
+  jobs            Job[]
+  jobMatches      JobMatch[]
+  recommendations CVRecommendation[]
+  tailoredResumes TailoredResume[]
+  applications    Application[]
+  savedSearches   SavedSearch[]
+  llmCache        LlmCache[]
+  rateLimits      RateLimitCounter[]
+}
+
+model CandidateProfile {
+  id                 String    @id @default(cuid())
+  userId             String    @unique
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  headline           String?
+  summary            String?
+  yearsExperience    Int?
+  location           String?
+  desiredRoles       String[]
+  preferredLocations String[]
+  workMode           WorkMode  @default(ANY)
+  salaryExpectation  String?
+  workAuthorization  String?
+  languages          String[]
+  industries         String[]
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+model Resume {
+  id               String         @id @default(cuid())
+  userId           String
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  originalFilename String
+  fileType         ResumeFileType
+  // Path of the original file relative to UPLOAD_DIR. Never under public/.
+  storagePath      String
+  fileSize         Int
+  contentHash      String
+  extractedText    String
+  parsedData       Json?
+  parseStatus      ParseStatus    @default(PENDING)
+  parseError       String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  experiences     Experience[]
+  educations      Education[]
+  skills          Skill[]
+  recommendations CVRecommendation[]
+  tailoredResumes TailoredResume[]
+  jobMatches      JobMatch[]
+
+  @@index([userId])
+}
+
+model Experience {
+  id           String    @id @default(cuid())
+  resumeId     String
+  resume       Resume    @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  position     Int
+  company      String
+  title        String
+  location     String?
+  startDate    String?
+  endDate      String?
+  description  String?
+  achievements String[]
+  technologies String[]
+
+  @@index([resumeId])
+}
+
+model Education {
+  id          String  @id @default(cuid())
+  resumeId    String
+  resume      Resume  @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  position    Int
+  institution String
+  degree      String?
+  field       String?
+  startDate   String?
+  endDate     String?
+  description String?
+
+  @@index([resumeId])
+}
+
+model Skill {
+  id          String  @id @default(cuid())
+  resumeId    String
+  resume      Resume  @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  position    Int
+  name        String
+  category    String?
+  proficiency String?
+
+  @@index([resumeId])
+}
+
+// Jobs are owned by the user who added or discovered them; discovery (phase 4)
+// creates per-user rows so isolation stays simple.
+model Job {
+  id             String         @id @default(cuid())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source         String
+  sourceJobId    String?
+  sourceUrl      String?
+  url            String?
+  dedupHash      String
+  title          String
+  company        String
+  location       String?
+  remoteType     RemoteType     @default(UNKNOWN)
+  employmentType EmploymentType @default(UNKNOWN)
+  description    String
+  requirements   String?
+  salary         String?
+  parsedData     Json?
+  postedAt       DateTime?
+  expiresAt      DateTime?
+  fetchedAt      DateTime       @default(now())
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  matches         JobMatch[]
+  recommendations CVRecommendation[]
+  tailoredResumes TailoredResume[]
+  applications    Application[]
+
+  @@unique([userId, source, sourceJobId])
+  @@unique([userId, dedupHash])
+  @@index([userId])
+}
+
+model JobMatch {
+  id                     String   @id @default(cuid())
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId                  String
+  job                    Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  resumeId               String
+  resume                 Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  // Internal compatibility score (0-100). NOT a hiring probability.
+  overallScore           Int
+  skillMatch             Int
+  experienceMatch        Int
+  responsibilityMatch    Int
+  educationMatch         Int
+  locationMatch          Int
+  languageMatch          Int
+  seniorityMatch         Int
+  workAuthorizationMatch Int
+  matchedRequirements    Json
+  missingRequirements    Json
+  transferableSkills     Json
+  concerns               Json
+  recommendation         String
+  explanation            String
+  createdAt              DateTime @default(now())
+
+  @@unique([jobId, resumeId])
+  @@index([userId])
+}
+
+model CVRecommendation {
+  id                 String                 @id @default(cuid())
+  userId             String
+  user               User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId              String
+  job                Job                    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  resumeId           String
+  resume             Resume                 @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  recommendationType RecommendationType
+  originalText       String?
+  suggestedText      String?
+  explanation        String
+  priority           RecommendationPriority
+  fabricationFlags   Json?
+  createdAt          DateTime               @default(now())
+
+  @@index([userId, jobId])
+}
+
+model TailoredResume {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  baseResumeId     String
+  baseResume       Resume   @relation(fields: [baseResumeId], references: [id], onDelete: Cascade)
+  jobId            String
+  job              Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  generatedContent Json
+  fabricationFlags Json?
+  createdAt        DateTime @default(now())
+
+  @@index([userId, jobId])
+}
+
+model Application {
+  id              String            @id @default(cuid())
+  userId          String
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId           String
+  job             Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status          ApplicationStatus @default(SAVED)
+  appliedAt       DateTime?
+  notes           String?
+  interviewDate   DateTime?
+  interviewDates  DateTime[]
+  rejectionReason String?
+  referral        String?
+  recruiter       String?
+  salary          String?
+  outcome         String?
+  respondedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([userId, jobId])
+  @@index([userId, status])
+}
+
+model SavedSearch {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  filters   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Cache of validated LLM outputs, keyed by content hash + prompt version.
+model LlmCache {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  promptName    String
+  promptVersion String
+  contentHash   String
+  provider      String
+  result        Json
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, promptName, promptVersion, contentHash])
+}
+
+// Fixed-window rate-limit counters for expensive operations.
+model RateLimitCounter {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action      String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@unique([userId, action, windowStart])
+}
+
+// Postgres-backed background queue, drained by a cron-triggered route.
+model BackgroundJob {
+  id        String      @id @default(cuid())
+  type      String
+  payload   Json
+  status    QueueStatus @default(PENDING)
+  attempts  Int         @default(0)
+  lastError String?
+  runAt     DateTime    @default(now())
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([status, runAt])
+}
+
+model JobSourceConfig {
+  id          String    @id @default(cuid())
+  kind        String
+  name        String
+  config      Json
+  enabled     Boolean   @default(true)
+  lastFetched DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([kind, name])
+}
